@@ -161,48 +161,6 @@ index 9f6e3cd..438c11a 100644
  EXTRAVERSION =
  NAME = Sneaky Weasel
  
-diff --git a/arch/arm/mach-ux500/cpu.c b/arch/arm/mach-ux500/cpu.c
-index 1da23bb..8aa104a 100644
---- a/arch/arm/mach-ux500/cpu.c
-+++ b/arch/arm/mach-ux500/cpu.c
-@@ -99,7 +99,27 @@ static void ux500_l2x0_inv_all(void)
- 	ux500_cache_sync();
- }
- 
--static int ux500_l2x0_init(void)
-+static int __init ux500_l2x0_unlock(void)
-+{
-+	int i;
-+
-+	/*
-+	 * Unlock Data and Instruction Lock if locked. Ux500 U-Boot versions
-+	 * apparently locks both caches before jumping to the kernel. The
-+	 * l2x0 core will not touch the unlock registers if the l2x0 is
-+	 * already enabled, so we do it right here instead. The PL310 has
-+	 * 8 sets of registers, one per possible CPU.
-+	 */
-+	for (i = 0; i < 8; i++) {
-+		writel_relaxed(0x0, l2x0_base + L2X0_LOCKDOWN_WAY_D_BASE +
-+			       i * L2X0_LOCKDOWN_STRIDE);
-+		writel_relaxed(0x0, l2x0_base + L2X0_LOCKDOWN_WAY_I_BASE +
-+			       i * L2X0_LOCKDOWN_STRIDE);
-+	}
-+	return 0;
-+}
-+
-+static int __init ux500_l2x0_init(void)
- {
- 	if (cpu_is_u5500())
- 		l2x0_base = __io_address(U5500_L2CC_BASE);
-@@ -108,6 +128,9 @@ static int ux500_l2x0_init(void)
- 	else
- 		ux500_unknown_soc();
- 
-+	/* Unlock before init */
-+	ux500_l2x0_unlock();
-+
- 	/* 64KB way size, 8 way associativity, force WA */
- 	l2x0_init(l2x0_base, 0x3e060000, 0xc0000fff);
  
 diff --git a/arch/arm/plat-mxc/include/mach/iomux-v3.h b/arch/arm/plat-mxc/include/mach/iomux-v3.h
 index ebbce33..4509956 100644
@@ -1155,97 +1113,8 @@ index 5cf2993..54139d0 100644
  		blkif->st_wr_sect += preq.nr_sects;
  
  	return 0;
-diff --git a/drivers/bluetooth/ath3k.c b/drivers/bluetooth/ath3k.c
-index 6bacef3..db7cb81 100644
---- a/drivers/bluetooth/ath3k.c
-+++ b/drivers/bluetooth/ath3k.c
-@@ -63,6 +63,7 @@ static struct usb_device_id ath3k_table[] = {
- 	/* Atheros AR3011 with sflash firmware*/
- 	{ USB_DEVICE(0x0CF3, 0x3002) },
- 	{ USB_DEVICE(0x13d3, 0x3304) },
-+	{ USB_DEVICE(0x0930, 0x0215) },
- 
- 	/* Atheros AR9285 Malbec with sflash firmware */
- 	{ USB_DEVICE(0x03F0, 0x311D) },
-@@ -375,6 +376,11 @@ static int ath3k_probe(struct usb_interface *intf,
- 
- 	/* load patch and sysconfig files for AR3012 */
- 	if (id->driver_info & BTUSB_ATH3012) {
-+
-+		/* New firmware with patch and sysconfig files already loaded */
-+		if (le16_to_cpu(udev->descriptor.bcdDevice) > 0x0001)
-+			return -ENODEV;
-+
- 		ret = ath3k_load_patch(udev);
- 		if (ret < 0) {
- 			BT_ERR("Loading patch file failed");
-diff --git a/drivers/bluetooth/btusb.c b/drivers/bluetooth/btusb.c
-index c2de895..b9af6db 100644
---- a/drivers/bluetooth/btusb.c
-+++ b/drivers/bluetooth/btusb.c
-@@ -54,11 +54,15 @@ static struct usb_driver btusb_driver;
- #define BTUSB_BCM92035		0x10
- #define BTUSB_BROKEN_ISOC	0x20
- #define BTUSB_WRONG_SCO_MTU	0x40
-+#define BTUSB_ATH3012		0x80
- 
- static struct usb_device_id btusb_table[] = {
- 	/* Generic Bluetooth USB device */
- 	{ USB_DEVICE_INFO(0xe0, 0x01, 0x01) },
- 
-+	/* Broadcom SoftSailing reporting vendor specific */
-+	{ USB_DEVICE(0x05ac, 0x21e1) },
-+
- 	/* Apple MacBookPro 7,1 */
- 	{ USB_DEVICE(0x05ac, 0x8213) },
- 
-@@ -71,9 +75,15 @@ static struct usb_device_id btusb_table[] = {
- 	/* Apple MacBookAir3,1, MacBookAir3,2 */
- 	{ USB_DEVICE(0x05ac, 0x821b) },
- 
-+	/* Apple MacBookAir4,1 */
-+	{ USB_DEVICE(0x05ac, 0x821f) },
-+
- 	/* Apple MacBookPro8,2 */
- 	{ USB_DEVICE(0x05ac, 0x821a) },
- 
-+	/* Apple MacMini5,1 */
-+	{ USB_DEVICE(0x05ac, 0x8281) },
-+
- 	/* AVM BlueFRITZ! USB v2.0 */
- 	{ USB_DEVICE(0x057c, 0x3800) },
- 
-@@ -105,12 +115,13 @@ static struct usb_device_id blacklist_table[] = {
- 	/* Atheros 3011 with sflash firmware */
- 	{ USB_DEVICE(0x0cf3, 0x3002), .driver_info = BTUSB_IGNORE },
- 	{ USB_DEVICE(0x13d3, 0x3304), .driver_info = BTUSB_IGNORE },
-+	{ USB_DEVICE(0x0930, 0x0215), .driver_info = BTUSB_IGNORE },
- 
- 	/* Atheros AR9285 Malbec with sflash firmware */
- 	{ USB_DEVICE(0x03f0, 0x311d), .driver_info = BTUSB_IGNORE },
- 
- 	/* Atheros 3012 with sflash firmware */
--	{ USB_DEVICE(0x0cf3, 0x3004), .driver_info = BTUSB_IGNORE },
-+	{ USB_DEVICE(0x0cf3, 0x3004), .driver_info = BTUSB_ATH3012 },
- 
- 	/* Atheros AR5BBU12 with sflash firmware */
- 	{ USB_DEVICE(0x0489, 0xe02c), .driver_info = BTUSB_IGNORE },
-@@ -914,6 +925,15 @@ static int btusb_probe(struct usb_interface *intf,
- 	if (ignore_sniffer && id->driver_info & BTUSB_SNIFFER)
- 		return -ENODEV;
- 
-+	if (id->driver_info & BTUSB_ATH3012) {
-+		struct usb_device *udev = interface_to_usbdev(intf);
-+
-+		/* Old firmware would otherwise let ath3k driver load
-+		 * patch and sysconfig files */
-+		if (le16_to_cpu(udev->descriptor.bcdDevice) <= 0x0001)
-+			return -ENODEV;
-+	}
-+
- 	data = kzalloc(sizeof(*data), GFP_KERNEL);
- 	if (!data)
- 		return -ENOMEM;
+
+
 diff --git a/drivers/gpu/drm/i915/intel_dp.c b/drivers/gpu/drm/i915/intel_dp.c
 index e2aced6..14264a8 100644
 --- a/drivers/gpu/drm/i915/intel_dp.c
@@ -3527,126 +3396,7 @@ index 20107fd..2a38d5e 100644
  extern int uvc_video_enable(struct uvc_streaming *stream, int enable);
  extern int uvc_probe_video(struct uvc_streaming *stream,
  		struct uvc_streaming_control *probe);
-diff --git a/drivers/mmc/core/core.c b/drivers/mmc/core/core.c
-index 38089b2..75db30e6 100644
---- a/drivers/mmc/core/core.c
-+++ b/drivers/mmc/core/core.c
-@@ -1057,7 +1057,7 @@ static void mmc_power_up(struct mmc_host *host)
- 	mmc_host_clk_release(host);
- }
- 
--static void mmc_power_off(struct mmc_host *host)
-+void mmc_power_off(struct mmc_host *host)
- {
- 	mmc_host_clk_hold(host);
- 
-@@ -1147,8 +1147,7 @@ void mmc_attach_bus(struct mmc_host *host, const struct mmc_bus_ops *ops)
- }
- 
- /*
-- * Remove the current bus handler from a host. Assumes that there are
-- * no interesting cards left, so the bus is powered down.
-+ * Remove the current bus handler from a host.
-  */
- void mmc_detach_bus(struct mmc_host *host)
- {
-@@ -1165,8 +1164,6 @@ void mmc_detach_bus(struct mmc_host *host)
- 
- 	spin_unlock_irqrestore(&host->lock, flags);
- 
--	mmc_power_off(host);
--
- 	mmc_bus_put(host);
- }
- 
-@@ -1675,6 +1672,7 @@ void mmc_stop_host(struct mmc_host *host)
- 
- 		mmc_claim_host(host);
- 		mmc_detach_bus(host);
-+		mmc_power_off(host);
- 		mmc_release_host(host);
- 		mmc_bus_put(host);
- 		return;
-@@ -1796,6 +1794,7 @@ int mmc_suspend_host(struct mmc_host *host)
- 				host->bus_ops->remove(host);
- 			mmc_claim_host(host);
- 			mmc_detach_bus(host);
-+			mmc_power_off(host);
- 			mmc_release_host(host);
- 			host->pm_flags = 0;
- 			err = 0;
-@@ -1883,6 +1882,7 @@ int mmc_pm_notify(struct notifier_block *notify_block,
- 			host->bus_ops->remove(host);
- 
- 		mmc_detach_bus(host);
-+		mmc_power_off(host);
- 		mmc_release_host(host);
- 		host->pm_flags = 0;
- 		break;
-diff --git a/drivers/mmc/core/core.h b/drivers/mmc/core/core.h
-index d9411ed..14664f1 100644
---- a/drivers/mmc/core/core.h
-+++ b/drivers/mmc/core/core.h
-@@ -43,6 +43,7 @@ int mmc_set_signal_voltage(struct mmc_host *host, int signal_voltage,
- 			   bool cmd11);
- void mmc_set_timing(struct mmc_host *host, unsigned int timing);
- void mmc_set_driver_type(struct mmc_host *host, unsigned int drv_type);
-+void mmc_power_off(struct mmc_host *host);
- 
- static inline void mmc_delay(unsigned int ms)
- {
-diff --git a/drivers/mmc/core/mmc.c b/drivers/mmc/core/mmc.c
-index aa7d1d7..20b42c8 100644
---- a/drivers/mmc/core/mmc.c
-+++ b/drivers/mmc/core/mmc.c
-@@ -359,6 +359,7 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
- 		 * card has the Enhanced area enabled.  If so, export enhanced
- 		 * area offset and size to user by adding sysfs interface.
- 		 */
-+		card->ext_csd.raw_partition_support = ext_csd[EXT_CSD_PARTITION_SUPPORT];
- 		if ((ext_csd[EXT_CSD_PARTITION_SUPPORT] & 0x2) &&
- 		    (ext_csd[EXT_CSD_PARTITION_ATTRIBUTE] & 0x1)) {
- 			u8 hc_erase_grp_sz =
-@@ -405,6 +406,7 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
- 	if (card->ext_csd.rev >= 5)
- 		card->ext_csd.rel_param = ext_csd[EXT_CSD_WR_REL_PARAM];
- 
-+	card->ext_csd.raw_erased_mem_count = ext_csd[EXT_CSD_ERASED_MEM_CONT];
- 	if (ext_csd[EXT_CSD_ERASED_MEM_CONT])
- 		card->erased_byte = 0xFF;
- 	else
-@@ -891,6 +893,7 @@ static void mmc_detect(struct mmc_host *host)
- 
- 		mmc_claim_host(host);
- 		mmc_detach_bus(host);
-+		mmc_power_off(host);
- 		mmc_release_host(host);
- 	}
- }
-diff --git a/drivers/mmc/core/sd.c b/drivers/mmc/core/sd.c
-index ff27741..bd8805c 100644
---- a/drivers/mmc/core/sd.c
-+++ b/drivers/mmc/core/sd.c
-@@ -1008,6 +1008,7 @@ static void mmc_sd_detect(struct mmc_host *host)
- 
- 		mmc_claim_host(host);
- 		mmc_detach_bus(host);
-+		mmc_power_off(host);
- 		mmc_release_host(host);
- 	}
- }
-diff --git a/drivers/mmc/core/sdio.c b/drivers/mmc/core/sdio.c
-index 262fff0..ac492ac 100644
---- a/drivers/mmc/core/sdio.c
-+++ b/drivers/mmc/core/sdio.c
-@@ -597,6 +597,7 @@ out:
- 
- 		mmc_claim_host(host);
- 		mmc_detach_bus(host);
-+		mmc_power_off(host);
- 		mmc_release_host(host);
- 	}
- }
+
 diff --git a/drivers/mtd/mtdchar.c b/drivers/mtd/mtdchar.c
 index 3f92731..9f8658e 100644
 --- a/drivers/mtd/mtdchar.c
@@ -5873,19 +5623,7 @@ index 4302e6e..81243a6 100644
  }
  
  static void transmit_chars(struct uart_pxa_port *up)
-diff --git a/drivers/tty/serial/serial_core.c b/drivers/tty/serial/serial_core.c
-index db7912c..6bc20d7 100644
---- a/drivers/tty/serial/serial_core.c
-+++ b/drivers/tty/serial/serial_core.c
-@@ -2003,6 +2003,8 @@ int uart_resume_port(struct uart_driver *drv, struct uart_port *uport)
- 		if (port->tty && port->tty->termios && termios.c_cflag == 0)
- 			termios = *(port->tty->termios);
- 
-+		if (console_suspend_enabled)
-+			uart_change_pm(state, 0);
- 		uport->ops->set_termios(uport, &termios, NULL);
- 		if (console_suspend_enabled)
- 			console_start(uport->cons);
+
 diff --git a/drivers/tty/tty_io.c b/drivers/tty/tty_io.c
 index b6f92d3..b44aef0 100644
 --- a/drivers/tty/tty_io.c
@@ -8107,42 +7845,7 @@ index f9cfd16..2acaf60 100644
  
  	/*
  	 * Try to lookup the file inside our RB tree, Since we grabbed "mtx"
-diff --git a/fs/ext4/ext4.h b/fs/ext4/ext4.h
-index 354619a..1a34c1c 100644
---- a/fs/ext4/ext4.h
-+++ b/fs/ext4/ext4.h
-@@ -175,6 +175,7 @@ struct mpage_da_data {
-  */
- #define	EXT4_IO_END_UNWRITTEN	0x0001
- #define EXT4_IO_END_ERROR	0x0002
-+#define EXT4_IO_END_QUEUED	0x0004
- 
- struct ext4_io_page {
- 	struct page	*p_page;
-@@ -357,8 +358,7 @@ struct flex_groups {
- 
- /* Flags that should be inherited by new inodes from their parent. */
- #define EXT4_FL_INHERITED (EXT4_SECRM_FL | EXT4_UNRM_FL | EXT4_COMPR_FL |\
--			   EXT4_SYNC_FL | EXT4_IMMUTABLE_FL | EXT4_APPEND_FL |\
--			   EXT4_NODUMP_FL | EXT4_NOATIME_FL |\
-+			   EXT4_SYNC_FL | EXT4_NODUMP_FL | EXT4_NOATIME_FL |\
- 			   EXT4_NOCOMPR_FL | EXT4_JOURNAL_DATA_FL |\
- 			   EXT4_NOTAIL_FL | EXT4_DIRSYNC_FL)
- 
-diff --git a/fs/ext4/inode.c b/fs/ext4/inode.c
-index c94774c..1265904 100644
---- a/fs/ext4/inode.c
-+++ b/fs/ext4/inode.c
-@@ -190,9 +190,6 @@ void ext4_evict_inode(struct inode *inode)
- 
- 	trace_ext4_evict_inode(inode);
- 
--	mutex_lock(&inode->i_mutex);
--	ext4_flush_completed_IO(inode);
--	mutex_unlock(&inode->i_mutex);
- 	ext4_ioend_wait(inode);
- 
- 	if (inode->i_nlink) {
+
 diff --git a/fs/ext4/namei.c b/fs/ext4/namei.c
 index 458a394..3d36d5a 100644
 --- a/fs/ext4/namei.c
@@ -8183,35 +7886,7 @@ index 458a394..3d36d5a 100644
  		if (retval) {
  			ext4_std_error(old_dir->i_sb, retval);
  			goto end_rename;
-diff --git a/fs/ext4/page-io.c b/fs/ext4/page-io.c
-index 97e5e98..bd6a85e 100644
---- a/fs/ext4/page-io.c
-+++ b/fs/ext4/page-io.c
-@@ -142,7 +142,23 @@ static void ext4_end_io_work(struct work_struct *work)
- 	unsigned long		flags;
- 	int			ret;
- 
--	mutex_lock(&inode->i_mutex);
-+	if (!mutex_trylock(&inode->i_mutex)) {
-+		/*
-+		 * Requeue the work instead of waiting so that the work
-+		 * items queued after this can be processed.
-+		 */
-+		queue_work(EXT4_SB(inode->i_sb)->dio_unwritten_wq, &io->work);
-+		/*
-+		 * To prevent the ext4-dio-unwritten thread from keeping
-+		 * requeueing end_io requests and occupying cpu for too long,
-+		 * yield the cpu if it sees an end_io request that has already
-+		 * been requeued.
-+		 */
-+		if (io->flag & EXT4_IO_END_QUEUED)
-+			yield();
-+		io->flag |= EXT4_IO_END_QUEUED;
-+		return;
-+	}
- 	ret = ext4_end_io_nolock(io);
- 	if (ret < 0) {
- 		mutex_unlock(&inode->i_mutex);
+
 diff --git a/fs/ext4/xattr.c b/fs/ext4/xattr.c
 index c757adc..19fe4e3 100644
 --- a/fs/ext4/xattr.c
@@ -9870,29 +9545,6 @@ index 78cc364..857a021 100644
  extern netdev_tx_t br_dev_xmit(struct sk_buff *skb,
  			       struct net_device *dev);
  #ifdef CONFIG_NET_POLL_CONTROLLER
-diff --git a/net/caif/caif_dev.c b/net/caif/caif_dev.c
-index 682c0fe..dbdaa95 100644
---- a/net/caif/caif_dev.c
-+++ b/net/caif/caif_dev.c
-@@ -209,8 +209,7 @@ static int caif_device_notify(struct notifier_block *me, unsigned long what,
- 	enum cfcnfg_phy_preference pref;
- 	enum cfcnfg_phy_type phy_type;
- 	struct cfcnfg *cfg;
--	struct caif_device_entry_list *caifdevs =
--	    caif_device_list(dev_net(dev));
-+	struct caif_device_entry_list *caifdevs;
- 
- 	if (dev->type != ARPHRD_CAIF)
- 		return 0;
-@@ -219,6 +218,8 @@ static int caif_device_notify(struct notifier_block *me, unsigned long what,
- 	if (cfg == NULL)
- 		return 0;
- 
-+	caifdevs = caif_device_list(dev_net(dev));
-+
- 	switch (what) {
- 	case NETDEV_REGISTER:
- 		caifd = caif_device_alloc(dev);
 diff --git a/net/can/bcm.c b/net/can/bcm.c
 index 184a657..c6cc66f 100644
 --- a/net/can/bcm.c
